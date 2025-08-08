@@ -5,7 +5,9 @@ import gdown
 import streamlit as st
 import torch
 import pandas as pd
-from transformers import BertTokenizer, BertConfig, BertForSequenceClassification
+import matplotlib.pyplot as plt
+from wordcloud import WordCloud
+from transformers import AutoTokenizer, BertConfig, BertForSequenceClassification
 
 # ===================== MODEL URL =====================
 # Model Aspek
