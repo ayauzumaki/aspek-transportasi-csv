@@ -31,7 +31,6 @@ SENTIMEN_MODEL_FILES = {
 KAMUS_CSV_URL = "https://drive.google.com/uc?id=1fGWZu5qVYJa-pv078spaLE4urs5zDDPV"
 KAMUS_PATH = "kamus.csv"
 
-# ===================== FUNGSI BANTUAN =====================
 def download_model(model_folder, model_files):
     if not os.path.exists(model_folder):
         os.makedirs(model_folder)
@@ -48,7 +47,7 @@ def download_kamus():
 
 @st.cache_resource(show_spinner=True)
 def load_tokenizer(folder):
-    return BertTokenizer.from_pretrained(folder)
+    return AutoTokenizer.from_pretrained(folder)
 
 @st.cache_resource(show_spinner=True)
 def load_model(folder):
@@ -70,55 +69,110 @@ def preprocess(text, kamus_slang):
     text = ' '.join([kamus_slang.get(word, word) for word in text.split()])
     return text.strip()
 
+def predict_aspek_sentimen(text, kamus_slang, tokenizer_aspek, model_aspek, tokenizer_sentimen, model_sentimen):
+    cleaned = preprocess(text, kamus_slang)
+
+    inputs_aspek = tokenizer_aspek(cleaned, return_tensors="pt", padding=True, truncation=True, max_length=128)
+    with torch.no_grad():
+        output_aspek = model_aspek(**inputs_aspek)
+    pred_aspek = torch.argmax(output_aspek.logits, dim=1).item()
+
+    if pred_aspek == 1:
+        inputs_sentimen = tokenizer_sentimen(cleaned, return_tensors="pt", padding=True, truncation=True, max_length=128)
+        with torch.no_grad():
+            output_sentimen = model_sentimen(**inputs_sentimen)
+        pred_sentimen = torch.argmax(output_sentimen.logits, dim=1).item()
+        sentimen = {2: "Positif", 0: "Negatif", 1: "Netral"}.get(pred_sentimen, "Tidak Diketahui")
+        return "Transportasi", sentimen
+    else:
+        return "Bukan Transportasi", "-"
+
+def plot_pie_chart(data, title):
+    fig, ax = plt.subplots()
+    ax.pie(data.values(), labels=data.keys(), autopct='%1.1f%%', startangle=140, colors=plt.cm.Paired.colors)
+    ax.axis('equal')
+    plt.title(title)
+    st.pyplot(fig)
+
+def generate_wordcloud(texts):
+    text = " ".join(texts)
+    wc = WordCloud(width=800, height=400, background_color='white').generate(text)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.imshow(wc, interpolation='bilinear')
+    ax.axis("off")
+    st.pyplot(fig)
+
 # ===================== APLIKASI STREAMLIT =====================
 def main():
     st.set_page_config(page_title="Prediksi Aspek dan Sentimen", layout="wide")
     st.title("🕋 Prediksi Aspek & Sentimen - Layanan Transportasi Haji")
 
+    # Unduh model & kamus
     download_model(ASPEK_FOLDER, ASPEK_MODEL_FILES)
     download_model(SENTIMEN_FOLDER, SENTIMEN_MODEL_FILES)
     download_kamus()
 
+    # Load model
     kamus_slang = load_kamus()
-
     tokenizer_aspek = load_tokenizer(ASPEK_FOLDER)
     model_aspek = load_model(ASPEK_FOLDER)
-
     tokenizer_sentimen = load_tokenizer(SENTIMEN_FOLDER)
     model_sentimen = load_model(SENTIMEN_FOLDER)
 
-    text = st.text_area("Masukkan teks ulasan atau komentar:", height=150)
+    # Upload file CSV
+    st.subheader("📤 Upload File CSV (harus ada kolom `text`)")
+    uploaded_file = st.file_uploader("Upload CSV", type="csv")
 
-    if st.button("Prediksi Aspek & Sentimen"):
-        if not text.strip():
-            st.warning("Masukkan teks dulu ya!")
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
+        if 'text' not in df.columns:
+            st.error("⚠️ CSV harus memiliki kolom bernama 'text'")
             return
 
-        cleaned = preprocess(text, kamus_slang)
+        hasil = []
 
-        # Prediksi Aspek
-        inputs_aspek = tokenizer_aspek(cleaned, return_tensors="pt", padding=True, truncation=True, max_length=128)
-        with torch.no_grad():
-            output_aspek = model_aspek(**inputs_aspek)
-        pred_aspek = torch.argmax(output_aspek.logits, dim=1).item()
+        with st.spinner("🔍 Sedang memproses prediksi, mohon tunggu..."):
+            for _, row in df.iterrows():
+                aspek, sentimen = predict_aspek_sentimen(
+                    row['text'], kamus_slang,
+                    tokenizer_aspek, model_aspek,
+                    tokenizer_sentimen, model_sentimen
+                )
+                hasil.append({"text": row['text'], "aspek": aspek, "sentimen": sentimen})
 
-        if pred_aspek == 1:
-            st.success("✅ Teks ini **termasuk aspek transportasi.**")
+        df_hasil = pd.DataFrame(hasil)
+        st.success("✅ Prediksi selesai!")
+        st.dataframe(df_hasil)
 
-            # Prediksi Sentimen jika aspek sesuai
-            inputs_sentimen = tokenizer_sentimen(cleaned, return_tensors="pt", padding=True, truncation=True, max_length=128)
-            with torch.no_grad():
-                output_sentimen = model_sentimen(**inputs_sentimen)
-            pred_sentimen = torch.argmax(output_sentimen.logits, dim=1).item()
+        # Statistik aspek
+        aspek_counts = df_hasil['aspek'].value_counts().to_dict()
+        st.subheader("📊 Statistik Aspek")
+        plot_pie_chart(aspek_counts, "Distribusi Aspek")
 
-            if pred_sentimen == 2:
-                st.success("Sentimen terhadap transportasi: **Positif**")
-            elif pred_sentimen == 0:
-                st.error("Sentimen terhadap transportasi: **Negatif**")
-            else:
-                st.warning("Sentimen tidak terdeteksi dengan pasti.")
+        # Statistik sentimen untuk aspek transportasi saja
+        sentimen_transportasi = df_hasil[df_hasil['aspek'] == "Transportasi"]['sentimen'].value_counts().to_dict()
+        st.subheader("📊 Statistik Sentimen (Aspek Transportasi)")
+        if sentimen_transportasi:
+            plot_pie_chart(sentimen_transportasi, "Distribusi Sentimen Aspek Transportasi")
         else:
-            st.warning("⛔ Teks ini **tidak termasuk aspek transportasi.**")
+            st.write("Tidak ada data dengan aspek transportasi untuk ditampilkan.")
+
+        # Wordcloud untuk teks yang beraspek transportasi
+        st.subheader("☁️ WordCloud untuk Teks dengan Aspek Transportasi")
+        texts_transportasi = df_hasil[df_hasil['aspek'] == "Transportasi"]['text'].tolist()
+        if texts_transportasi:
+            generate_wordcloud(texts_transportasi)
+        else:
+            st.write("Tidak ada data dengan aspek Transportasi untuk WordCloud.")
+
+        # Download hasil CSV
+        csv_hasil = df_hasil.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="💾 Download Hasil CSV",
+            data=csv_hasil,
+            file_name="hasil_prediksi_aspek_sentimen.csv",
+            mime='text/csv'
+        )
 
 if __name__ == "__main__":
     main()

@@ -1,5 +1,7 @@
 streamlit
+transformers>=4.0.0
 torch
-transformers
-gdown
 pandas
+gdown
+wordcloud
+matplotlib
